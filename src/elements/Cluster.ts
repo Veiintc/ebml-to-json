@@ -14,6 +14,7 @@ export interface SilentTracks extends MasterElement, ElementDetail {
     SilentTrackNumber: NumberElement[];
 }
 export interface SimpleBlock extends BinaryElement, ElementDetail {
+    value: any;
     trackNumber: number;
     timecode: number;
     blockDuration: number;

@@ -31,5 +31,11 @@ console.log(ebmlJson.Segment.Cluster[1].Timecode.value); // ex) 3300
 // 要素の構造や値を変更し、Blobとして出力できます。
 ebmlJson.Segment.Cluster[1].Timecode.value = 6600;
 const editMovie = ebmlJson.toBlob();
+//clone a new class
+const ebmlJsonClone = ebmlJson.clone();
+//get arraybuffer
+const MovieBuffer = ebmlJson.toBuffer();
 document.getElementsByTagName("video")[0].src = URL.createObjectURL(editMovie);
+// cut in approximate range
+document.getElementsByTagName("video")[0].src = URL.createObjectURL(editMovie.slice(2000,3000).toBlob("vp9"));
 ```

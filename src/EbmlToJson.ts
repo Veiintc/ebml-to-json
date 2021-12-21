@@ -1,14 +1,15 @@
-import { EBMLElementDetail, tools, Decoder, Encoder, MasterElement } from "ts-ebml";
+import { EBMLElementDetail, tools, Decoder, Encoder, MasterElement,Reader } from "ts-ebml";
 import { EBML, Segment, SimpleBlock, BlockGroup, Cluster } from "./elements";
 import { OutputExcludeKeys, MultipleElements } from "./Const";
 import { Buffer } from "ts-ebml/lib/tools";
-
+export { Decoder, Encoder, Reader, tools }
 export class EbmlToJson {
-    public EBML: EBML;
-    public Segment: Segment;
+    public EBML!: EBML;
+    public Segment!: Segment;
 
     /**
      * EBMLファイルを読み込み、EBML・Segmentプロパティに設定する
+     * Load the ebml file and set it to EBML・Segment attribute
      * @param buffer 
      */
     public constructor(buffer: ArrayBuffer) {
@@ -93,23 +94,131 @@ export class EbmlToJson {
         }
 
         toJsonRecursive(elms, this);
+        this.formatFix();
+    }
+    /**
+     * fix duration and ignore error block
+     */
+    public formatFix(): void {
+        const Segment = <any>this.Segment;
+        if (Segment.blocks) {
+            delete Segment.blocks;
+        }
+        const startTime = Segment.Cluster[0].Timecode.value;
+        if (startTime !== 0) {
+            Segment.Cluster.forEach((e: Cluster) => {
+                e.Timecode.value = e.Timecode.value - startTime;
+            })
+            delete Segment.Info[0].Duration;
+        }
+        if (!Segment.Info[0].Duration) {
+            const lastCluster = Segment.Cluster[Segment.Cluster.length - 1];
+            const lastBlocks = lastCluster.blocks[lastCluster.blocks.length - 1];
+            const duration = lastCluster.Timecode.value + lastBlocks.timecode + 30;
+            Segment.Info[0].Duration = {
+                EBML_ID: "4489",
+                type: "f",
+                name: "Duration",
+                level: 2,
+                data: null,
+                schema: {
+                    description: "Duration of the segment (based on TimecodeScale).",
+                    level: 2,
+                    minver: 1,
+                    name: "Duration",
+                    range: "> 0",
+                    type: "f",
+                },
+                dataEnd: null,
+                dataSize: null,
+                dataStart: null,
+                sizeEnd: null,
+                sizeStart: null,
+                tagEnd: null,
+                tagStart: null,
+                value: duration
+            };
+            Segment.Info[0].Duration = tools.encodeValueToBuffer(<any>Segment.Info[0].Duration);
+        }
     }
 
     /**
      * Json化したEBMLファイルをBlobにして返します。
+     * Restore the JSON ebml file to blob.
      * @param codecs 
      */
-    public toBlob(codecs: string) {
+    public toBlob(codecs: string): Blob {
+        const buf = this.toBuffer();
+        return new Blob([buf], { type: `video/webm; codecs=${codecs}` });
+    }
+    /**
+     * convert JSON EBML to ArrayBuffer
+     * @returns ArrayBuffer
+     */
+    public toBuffer(): ArrayBuffer {
         const elms = this._jsonToElmArray();
         const encoder = new Encoder();
-        const buf = encoder.encode(elms);
-        return new Blob([buf], { type: `video/webm; codecs="${codecs}"` });
+        return encoder.encode(elms);
     }
-
+    /**
+     * clone a new EbmlToJson class
+     * @returns EbmlToJson
+     */
+    public clone(): EbmlToJson {
+        const arrayBuffer = this.toBuffer();
+        return new EbmlToJson(arrayBuffer);
+    }
+    /**
+     * cut in approximate range
+     * @param startTime start time of cut 
+     * @param endTime end time of cut 
+     * @returns EbmlToJson
+     */
+    public slice(startTime: number, endTime: number): EbmlToJson {
+        const ret = this.clone();
+        const duration = ret.Segment.Info[0].Duration!.value;
+        if (startTime < 0) {
+            startTime = duration + startTime;
+        }
+        if (endTime < 0) {
+            endTime = duration + endTime;
+        }
+        if (endTime > duration || !endTime) endTime = duration;
+        if (startTime > endTime) throw new Error(`Error startTime:${startTime} ,endTime:${endTime}`);
+        const clusterStartIndex = ret.Segment.Cluster.findIndex(e => e.Timecode.value >= startTime);
+        const clusterEndIndex = ret.Segment.Cluster.findIndex(e => e.Timecode.value >= endTime) ?? ret.Segment.Cluster.length;
+        const body = ret.Segment.Cluster.slice(clusterStartIndex, clusterEndIndex);
+        if (clusterEndIndex !== ret.Segment.Cluster.length) {
+            const endCluster = ret.Segment.Cluster[clusterEndIndex - 1];
+            let endDuration = endTime - endCluster.Timecode.value;
+            endCluster.blocks = endCluster.blocks.filter(e => {
+                if (endDuration < 0) return false;
+                endDuration = endDuration - e.blockDuration;
+                return true;
+            })
+            body[body.length - 1] = endCluster;
+        }
+        if (clusterStartIndex !== 0) {
+            const startCluster = ret.Segment.Cluster[clusterStartIndex - 1];
+            let startDuration = startTime - startCluster.Timecode.value;
+            startCluster.blocks = startCluster.blocks.reverse().filter(e => {
+                if (startDuration < 0) return false;
+                startDuration = startDuration - e.blockDuration;
+                return true;
+            }).reverse()
+            startCluster.Timecode.value = startTime - startDuration;
+            body.unshift(startCluster);
+        }
+        ret.Segment.Cluster = body;
+        delete ret.Segment.Info[0].Duration;
+        ret.formatFix();
+        return ret
+    }
     /**
      * Json化したEBMLファイルを文字列で出力します。
+     * Output the JSON ebml file as a string.
      */
-    public toString() {
+    public toString():string {
         return JSON.stringify({ EBML: this.EBML, Segment: this.Segment }, function (k, v) {
             if (OutputExcludeKeys.includes(k)) {
                 return;
